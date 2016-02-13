@@ -6,7 +6,7 @@
                 tools:context=".MainActivity"
                 tools:deviceIds="wear_round">
 
-    <org.isoron.simpletimer.TimerView
+    <org.isoron.simpletimer.views.TimerView
         android:layout_height="match_parent"
         android:layout_width="match_parent"
         android:id="@+id/timerview"

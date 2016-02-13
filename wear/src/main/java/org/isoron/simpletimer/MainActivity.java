@@ -4,12 +4,15 @@ import android.app.AlarmManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.support.wearable.activity.WearableActivity;
 import android.support.wearable.view.WatchViewStub;
 import android.util.Log;
 
 import org.isoron.base.AmbientModeListener;
+import org.isoron.simpletimer.model.SimpleTimer;
+import org.isoron.simpletimer.views.TimerView;
 
 import java.util.Timer;
 import java.util.TimerTask;
@@ -18,13 +21,16 @@ public class MainActivity extends WearableActivity
 {
 
     private static final String TAG = "MainActivity";
+    public static final String PREFS_NAME = "SimpleTimerPrefs";
+    public static final int DEFAULT_INITIAL_TIME = 5 * 60 * 1000;
+
     AmbientModeListener ambientModeListener = null;
     TimerView timerView;
 
-    private AlarmManager ambientModeAlarmManager;
+    private AlarmManager alarmManager;
     private PendingIntent ambientModePendingIntent;
-    private Timer timer;
-    private boolean isActive = false;
+    private Timer fixedRateTimer;
+    private SimpleTimer stimer;
 
     @Override
     protected void onCreate(Bundle savedInstanceState)
@@ -34,14 +40,17 @@ public class MainActivity extends WearableActivity
 
         setAmbientEnabled();
 
-        ambientModeAlarmManager = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+        stimer = new SimpleTimer();
 
+        alarmManager = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
         Intent ambientModeIntent = new Intent(getApplicationContext(), MainActivity.class);
         ambientModeIntent.setAction("REFRESH");
-
-        ambientModePendingIntent =
-                PendingIntent.getActivity(getApplicationContext(), 0, ambientModeIntent,
+        ambientModePendingIntent = PendingIntent
+                .getActivity(getApplicationContext(), 0, ambientModeIntent,
                         PendingIntent.FLAG_UPDATE_CURRENT);
+
+        SharedPreferences preferences = getSharedPreferences(PREFS_NAME, 0);
+        final long initialTime = preferences.getLong("initialTime", DEFAULT_INITIAL_TIME);
 
         final WatchViewStub stub = (WatchViewStub) findViewById(R.id.watch_view_stub);
         stub.setOnLayoutInflatedListener(new WatchViewStub.OnLayoutInflatedListener()
@@ -50,19 +59,21 @@ public class MainActivity extends WearableActivity
             public void onLayoutInflated(WatchViewStub stub)
             {
                 timerView = (TimerView) findViewById(R.id.timerview);
+                timerView.setTime(initialTime);
+                timerView.setTimer(stimer);
                 setAmbientModeListener(timerView);
-
-                startTimer();
-                refresh();
+                startFixedRateTimer();
+                refreshViews();
             }
         });
     }
 
-    private void startTimer()
+    private void startFixedRateTimer()
     {
-        if (timer != null) timer.cancel();
-        timer = new Timer();
-        timer.scheduleAtFixedRate(new TimerTask()
+        if (fixedRateTimer != null) fixedRateTimer.cancel();
+
+        fixedRateTimer = new Timer();
+        fixedRateTimer.scheduleAtFixedRate(new TimerTask()
         {
             @Override
             public void run()
@@ -72,44 +83,38 @@ public class MainActivity extends WearableActivity
                     @Override
                     public void run()
                     {
-                        refresh();
+                        refreshViews();
                     }
                 });
             }
         }, 0, 1000);
     }
 
-    private void stopTimer()
+    private void stopFixedRateTimer()
     {
-        if (timer != null) timer.cancel();
+        if (fixedRateTimer != null) fixedRateTimer.cancel();
     }
 
-    private void refresh()
+    private void refreshViews()
     {
-        Log.d(TAG, "refresh()  ambient? " + isAmbient() + "  active? " + isActive);
-
         if (timerView != null)
         {
             timerView.tick();
             timerView.invalidate();
         }
 
-        if (isAmbient() || !isActive)
-        {
-            long delay = -1;
-            if (timerView != null)
-            {
-                if (isAmbient()) delay = timerView.getMillisecondsUntilNextMinute();
-                else delay = timerView.getRemainingTime();
-            }
+        if (isAmbient()) scheduleNextRefresh();
+    }
 
-            if (delay > 0)
-            {
-                Log.d(TAG, "sleeping for " + delay + " milliseconds (" + delay / 1000 / 60.0 + " minutes)");
-                ambientModeAlarmManager.setExact(AlarmManager.RTC_WAKEUP,
-                        System.currentTimeMillis() + delay + 100, ambientModePendingIntent);
-            }
-        }
+    private void scheduleNextRefresh()
+    {
+        long delay = timerView.getMillisecondsUntilNextMinute();
+        if (delay < 0) return;
+
+        Log.d(TAG, "sleeping for " + delay + " milliseconds (" + delay / 1000 / 60.0 +
+                " minutes)");
+        alarmManager.setExact(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + delay + 100,
+                ambientModePendingIntent);
     }
 
     @Override
@@ -117,8 +122,10 @@ public class MainActivity extends WearableActivity
     {
         super.onEnterAmbient(ambientDetails);
         if (ambientModeListener != null) ambientModeListener.onEnterAmbient(ambientDetails);
-        stopTimer();
-        refresh();
+
+        stopFixedRateTimer();
+
+        refreshViews();
     }
 
     @Override
@@ -126,8 +133,10 @@ public class MainActivity extends WearableActivity
     {
         super.onExitAmbient();
         if (ambientModeListener != null) ambientModeListener.onExitAmbient();
-        startTimer();
-        refresh();
+
+        startFixedRateTimer();
+
+        refreshViews();
     }
 
     @Override
@@ -135,6 +144,7 @@ public class MainActivity extends WearableActivity
     {
         Log.d(TAG, "onUpdateAmbient()");
         super.onUpdateAmbient();
+
         if (ambientModeListener != null) ambientModeListener.onUpdateAmbient();
     }
 
@@ -151,7 +161,7 @@ public class MainActivity extends WearableActivity
 
         Log.d(TAG, "onNewIntent: " + intent.getAction());
 
-        refresh();
+        refreshViews();
     }
 
     @Override
@@ -159,16 +169,32 @@ public class MainActivity extends WearableActivity
     {
         super.onPause();
         Log.d(TAG, "onPause()");
-        isActive = false;
-        stopTimer();
-        refresh();
+
+        stopFixedRateTimer();
+
+        refreshViews();
     }
 
     @Override
     protected void onStop()
     {
         super.onStop();
+        stopFixedRateTimer();
+
+        savePreferences();
+
+        if (!isAmbient()) finishAffinity();
+
         Log.d(TAG, "onStop()");
+    }
+
+    private void savePreferences()
+    {
+        long totalTime = timerView.getTime();
+        SharedPreferences settings = getSharedPreferences(PREFS_NAME, 0);
+        SharedPreferences.Editor editor = settings.edit();
+        editor.putLong("initialTime", totalTime);
+        editor.commit();
     }
 
     @Override
@@ -176,10 +202,7 @@ public class MainActivity extends WearableActivity
     {
         super.onResume();
         Log.d(TAG, "onResume()");
-
-        isActive = true;
-        if(!isAmbient()) startTimer();
-        refresh();
+        if (!isAmbient()) startFixedRateTimer();
     }
 
     @Override
