@@ -40,8 +40,6 @@ public class MainActivity extends WearableActivity
 
         setAmbientEnabled();
 
-        stimer = new SimpleTimer();
-
         alarmManager = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
         Intent ambientModeIntent = new Intent(getApplicationContext(), MainActivity.class);
         ambientModeIntent.setAction("REFRESH");
@@ -52,6 +50,9 @@ public class MainActivity extends WearableActivity
         SharedPreferences preferences = getSharedPreferences(PREFS_NAME, 0);
         final long initialTime = preferences.getLong("initialTime", DEFAULT_INITIAL_TIME);
 
+        stimer = new SimpleTimer();
+        stimer.setTotalTime(initialTime);
+
         final WatchViewStub stub = (WatchViewStub) findViewById(R.id.watch_view_stub);
         stub.setOnLayoutInflatedListener(new WatchViewStub.OnLayoutInflatedListener()
         {
@@ -59,8 +60,8 @@ public class MainActivity extends WearableActivity
             public void onLayoutInflated(WatchViewStub stub)
             {
                 timerView = (TimerView) findViewById(R.id.timerview);
-                timerView.setTime(initialTime);
                 timerView.setTimer(stimer);
+                stimer.setListener(timerView);
                 setAmbientModeListener(timerView);
                 startFixedRateTimer();
                 refreshViews();
@@ -99,7 +100,6 @@ public class MainActivity extends WearableActivity
     {
         if (timerView != null)
         {
-            timerView.tick();
             timerView.invalidate();
         }
 
@@ -108,7 +108,7 @@ public class MainActivity extends WearableActivity
 
     private void scheduleNextRefresh()
     {
-        long delay = timerView.getMillisecondsUntilNextMinute();
+        long delay = stimer.getMillisecondsUntilNextMinute();
         if (delay < 0) return;
 
         Log.d(TAG, "sleeping for " + delay + " milliseconds (" + delay / 1000 / 60.0 +
@@ -190,7 +190,7 @@ public class MainActivity extends WearableActivity
 
     private void savePreferences()
     {
-        long totalTime = timerView.getTime();
+        long totalTime = stimer.getTotalTime();
         SharedPreferences settings = getSharedPreferences(PREFS_NAME, 0);
         SharedPreferences.Editor editor = settings.edit();
         editor.putLong("initialTime", totalTime);

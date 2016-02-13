@@ -18,20 +18,19 @@ import android.view.View;
 
 import org.isoron.base.AmbientModeListener;
 import org.isoron.base.ColorHelper;
-import org.isoron.simpletimer.MainActivity;
 import org.isoron.simpletimer.model.SimpleTimer;
+import org.isoron.simpletimer.model.SimpleTimerListener;
 
 import java.util.Calendar;
 
 
-public class TimerView extends View implements AmbientModeListener
+public class TimerView extends View implements AmbientModeListener, SimpleTimerListener
 {
     private static final String TAG = "TimerView";
 
     private int primaryColor;
     private int secondaryColor;
     private int tertiaryColor;
-
     private int backgroundColor;
 
     private Paint paint;
@@ -47,10 +46,6 @@ public class TimerView extends View implements AmbientModeListener
     private Vibrator vibrator;
 
     private int step;
-    private boolean isRunning;
-    private long totalTime;
-    private long remainingTime;
-    private long lastTick;
 
     private boolean hasLongPressed;
     private boolean hasMoved = false;
@@ -69,10 +64,7 @@ public class TimerView extends View implements AmbientModeListener
         this.activity = (WearableActivity) ctx;
 
         step = 0;
-        totalTime = MainActivity.DEFAULT_INITIAL_TIME;
-        remainingTime = totalTime;
 
-        isRunning = false;
         hasMoved = false;
         hasLongPressed = false;
         stimer = null;
@@ -121,55 +113,17 @@ public class TimerView extends View implements AmbientModeListener
         paintAmbient.setTextAlign(Paint.Align.CENTER);
     }
 
-    public void tick()
+    public void onTimeout()
     {
-        long currentTime = System.currentTimeMillis();
+        step = 0;
+        vibrator.vibrate(VIBRATION_FINISH, -1);
 
-        step = (step + 1) % 2;
-
-        if (remainingTime <= 0)
-        {
-            isRunning = false;
-        }
-
-        if (isRunning)
-        {
-            remainingTime -= (currentTime - lastTick);
-
-            if (remainingTime <= 0)
-            {
-                step = 1;
-                isRunning = false;
-                remainingTime = totalTime;
-                vibrator.vibrate(VIBRATION_FINISH, -1);
-
-                PowerManager powerManager =
-                        (PowerManager) activity.getSystemService(Activity.POWER_SERVICE);
-                PowerManager.WakeLock wakeLock = powerManager.newWakeLock(
-                        (PowerManager.SCREEN_BRIGHT_WAKE_LOCK | PowerManager.FULL_WAKE_LOCK |
-                                PowerManager.ACQUIRE_CAUSES_WAKEUP), "MyWakelockTag");
-                wakeLock.acquire(500);
-            }
-        }
-
-        lastTick = currentTime;
-    }
-
-    public long getMillisecondsUntilNextMinute()
-    {
-        if (!isRunning) return -1;
-        return remainingTime % 60000;
-    }
-
-    public long getTime()
-    {
-        return totalTime;
-    }
-
-    public void setTime(long totalTime)
-    {
-        this.totalTime = totalTime;
-        this.remainingTime = totalTime;
+        PowerManager powerManager =
+                (PowerManager) activity.getSystemService(Activity.POWER_SERVICE);
+        PowerManager.WakeLock wakeLock = powerManager.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK | PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                "MyWakelockTag");
+        wakeLock.acquire(5000);
     }
 
     @Override
@@ -194,6 +148,8 @@ public class TimerView extends View implements AmbientModeListener
     {
         paint = paintInteractive;
         if (ambientMode) paint = paintAmbient;
+
+        step = (step + 1) % 2;
 
         clearBackground(canvas);
         drawTimer(canvas);
@@ -226,6 +182,8 @@ public class TimerView extends View implements AmbientModeListener
         else paint.setColor(primaryColor);
         long minutes;
 
+        long remainingTime = stimer.getRemainingTime();
+
         if (ambientMode)
         {
             minutes = (long) (60 * Math.ceil(remainingTime / 1000 / 60.0));
@@ -238,7 +196,7 @@ public class TimerView extends View implements AmbientModeListener
             minutes = (long) (60 * Math.floor(remainingTime / 1000 / 60.0));
             long seconds = remainingTime / 1000 % 60;
 
-            if (isRunning || step == 1)
+            if (stimer.isRunning() || step == 1)
             {
                 paint.setTextSize(size * 0.25f);
                 float minutesWidth = paint.measureText(String.format("%d", minutes / 60));
@@ -273,14 +231,16 @@ public class TimerView extends View implements AmbientModeListener
 
     private void clearBackground(Canvas canvas)
     {
-        paint.setColor(backgroundColor);
+        if(ambientMode) paint.setColor(Color.BLACK);
+        else paint.setColor(backgroundColor);
+
         canvas.drawRect(screenRect, paint);
     }
 
     @Override
     public void onEnterAmbient(Bundle ambientDetails)
     {
-        if (!isRunning) activity.finishAffinity();
+        if (!stimer.isRunning()) activity.finishAffinity();
 
         ambientMode = true;
         Log.d(TAG, "onEnterAmbient()");
@@ -302,7 +262,8 @@ public class TimerView extends View implements AmbientModeListener
     class TouchListener implements View.OnTouchListener
     {
         private float prevY;
-        private long prevTime;
+        private float prevX;
+        private long prevDy;
 
         @Override
         public boolean onTouch(View v, MotionEvent event)
@@ -313,31 +274,35 @@ public class TimerView extends View implements AmbientModeListener
             {
                 case MotionEvent.ACTION_DOWN:
                     prevY = event.getY();
-                    prevTime = remainingTime;
+                    prevX = event.getX();
                     hasMoved = false;
                     hasLongPressed = false;
                     break;
 
                 case MotionEvent.ACTION_MOVE:
-                    float dy = (event.getY() - prevY) / box;
+                    int dy = (int) ((prevY - event.getY()) / box);
+                    int dx = (int) ((prevX - event.getX()) / box);
+
                     if (Math.abs(dy) < 1) break;
+
+
                     hasMoved = true;
+                    if (dy == prevDy) break;
 
-                    if (isRunning) break;
+                    stimer.increment(dy > 0 ? 1 : -1);
 
-                    totalTime = Math.max(GRANULARITY, prevTime - (long) dy * GRANULARITY);
-                    totalTime = (totalTime / GRANULARITY) * GRANULARITY;
-                    remainingTime = totalTime;
-
-                    step = 1;
+                    step = 0;
+                    prevDy = dy;
+                    prevY = event.getY();
                     invalidate();
                     break;
 
                 case MotionEvent.ACTION_UP:
                     if (hasMoved) break;
                     if (hasLongPressed) break;
+                    prevDy = -100;
 
-                    isRunning = !isRunning;
+                    stimer.flip();
 
                     vibrator.vibrate(80);
                     invalidate();
@@ -355,8 +320,7 @@ public class TimerView extends View implements AmbientModeListener
         {
             if (hasMoved) return false;
 
-            remainingTime = totalTime;
-            isRunning = false;
+            stimer.reset();
 
             vibrator.vibrate(250);
             hasLongPressed = true;
