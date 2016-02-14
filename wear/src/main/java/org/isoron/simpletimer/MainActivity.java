@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
+import android.provider.AlarmClock;
 import android.support.wearable.activity.WearableActivity;
 import android.support.wearable.view.WatchViewStub;
 import android.util.Log;
@@ -67,6 +68,22 @@ public class MainActivity extends WearableActivity
                 refreshViews();
             }
         });
+
+        executeIntent();
+    }
+
+    private void executeIntent()
+    {
+        Intent intent = getIntent();
+
+        if(intent == null) return;
+        if(!intent.getAction().equals(AlarmClock.ACTION_SET_TIMER)) return;
+
+        Integer seconds = intent.getIntExtra(AlarmClock.EXTRA_LENGTH, -1);
+        if(seconds < 0) return;
+
+        stimer.setTotalTime(seconds * 1000);
+        stimer.resume();
     }
 
     private void startFixedRateTimer()
